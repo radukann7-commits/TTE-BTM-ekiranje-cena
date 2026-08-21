@@ -1,0 +1,33 @@
+name: Update TTE XML
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  update-xml:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download fresh TTE XML files
+        env:
+          ETAIL_URL: https://tte.rs/api/sr/products?output_type=xml&api_key=1GQTUjZo7rlFIlsxMyidtVyh
+          HAVIT_URL: https://tte.rs/api/sr/products?output_type=xml&api_key=jnak1b82M19JEf6jMkz6SGxo
+        run: |
+          curl -L --fail --retry 3 "$ETAIL_URL" -o "Etail_spec.xml"
+          curl -L --fail --retry 3 "$HAVIT_URL" -o "Havit.xml"
+
+          echo "Etail XML:"
+          grep -o '<article_number>10190</article_number>' Etail_spec.xml | head -1 || true
+
+          echo "Havit XML:"
+          grep -o '<article_number>10190</article_number>' Havit.xml | head -1 || true
+
+      - name: Save fresh XML files
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-tte-xml
+          path: |
+            Etail_spec.xml
+            Havit.xml
