@@ -32,7 +32,7 @@ def clean_text(value):
 
 def normalize_text(value):
     value = clean_text(value).lower()
-    for a, b in {"č":"c", "ć":"c", "š":"s", "ž":"z", "đ":"d"}.items():
+    for a, b in {"č": "c", "ć": "c", "š": "s", "ž": "z", "đ": "d"}.items():
         value = value.replace(a, b)
     return " ".join(re.sub(r"[^a-z0-9]+", " ", value).split())
 
@@ -126,7 +126,6 @@ def read_btm_xls(filename):
     ean_col = find_column(headers, ["EAN", "Barkod", "Bar code", "Barcode", "EAN kod"])
     name_col = find_column(headers, ["Naziv", "Naziv artikla", "Artikal naziv", "Product name", "Name"])
     price_col = find_column(headers, ["Cena", "Cena RSD", "Cena bez PDV", "Cena NETO", "Neto cena", "Price"])
-    code_col = find_column(headers, ["Šifra", "Sifra", "Artikal šifra", "Product code", "Code"])
 
     if ean_col is None:
         raise Exception("Ne mogu da pronađem BTM EAN/Barkod kolonu.")
@@ -140,10 +139,9 @@ def read_btm_xls(filename):
         ean = normalize_ean(sheet.cell_value(row, ean_col))
         name = clean_text(sheet.cell_value(row, name_col))
         price = number_from_text(sheet.cell_value(row, price_col))
-        code = clean_text(sheet.cell_value(row, code_col)) if code_col is not None else ""
         if not ean or not name or price is None:
             continue
-        products.append({"ean": ean, "name": name, "code": code, "net_price": price})
+        products.append({"ean": ean, "name": name, "net_price": price})
     return products
 
 
@@ -166,11 +164,16 @@ def parse_tte_xml(xml_data, source_name):
         ean = normalize_ean(get_xml_value(product, "ean"))
         if not ean:
             continue
+
         brand = get_xml_value(product, "brand")
         if normalize_text(brand) in EXCLUDED_BRANDS:
             continue
 
-        price_text = get_xml_value(product, "neto_price") or get_xml_value(product, "net_price") or get_xml_value(product, "price")
+        price_text = (
+            get_xml_value(product, "neto_price")
+            or get_xml_value(product, "net_price")
+            or get_xml_value(product, "price")
+        )
         net_price = number_from_text(price_text)
         if net_price is None:
             continue
@@ -197,10 +200,10 @@ def main():
 
     for btm in btm_products:
         ean = btm["ean"]
-        etail = etail_products.get(ean)
         havit = havit_products.get(ean)
+        etail = etail_products.get(ean)
 
-        if not etail and not havit:
+        if not havit and not etail:
             continue
 
         btm_net = btm["net_price"]
@@ -210,24 +213,37 @@ def main():
         havit_diff = round(havit_net - btm_net, 2) if havit_net is not None else None
         etail_diff = round(etail_net - btm_net, 2) if etail_net is not None else None
 
-        if not ((havit_diff is not None and abs(havit_diff) >= 0.01) or (etail_diff is not None and abs(etail_diff) >= 0.01)):
+        if not (
+            (havit_diff is not None and abs(havit_diff) >= 0.01)
+            or (etail_diff is not None and abs(etail_diff) >= 0.01)
+        ):
             continue
 
-        tte_code = havit["article_number"] if havit else etail["article_number"]
+        # TTE šifra se uzima iz XML-a; ako postoji u oba izvora, koristimo HAVIT izvor.
+        tte_code = ""
+        if havit and havit.get("article_number"):
+            tte_code = havit["article_number"]
+        elif etail and etail.get("article_number"):
+            tte_code = etail["article_number"]
 
         results.append([
             ean,
-            btm["code"],
+            tte_code,
             btm["name"],
             format_price(btm_net),
             format_price(havit_net),
             format_price(havit_diff),
             format_price(etail_net),
             format_price(etail_diff),
-            tte_code,
         ])
 
-    results.sort(key=lambda row: max(abs(float(row[5])) if row[5] != "" else 0, abs(float(row[7])) if row[7] != "" else 0), reverse=True)
+    results.sort(
+        key=lambda row: max(
+            abs(float(row[5])) if row[5] != "" else 0,
+            abs(float(row[7])) if row[7] != "" else 0,
+        ),
+        reverse=True,
+    )
 
     workbook = Workbook()
     sheet = workbook.active
@@ -235,14 +251,13 @@ def main():
 
     headers = [
         "EAN",
-        "BTM šifra",
+        "TTE šifra",
         "Artikal",
         "BTM cena NETO",
         "HAVIT cena NETO",
         "Razlika HAVIT",
         "ETAIL SPEC cena NETO",
         "Razlika ETAIL SPEC",
-        "TTE šifra",
     ]
     sheet.append(headers)
 
@@ -259,7 +274,16 @@ def main():
             if isinstance(cell.value, (int, float)):
                 cell.number_format = "#,##0.00"
 
-    widths = {1: 16, 2: 16, 3: 60, 4: 18, 5: 18, 6: 16, 7: 21, 8: 20, 9: 18}
+    widths = {
+        1: 16,
+        2: 18,
+        3: 60,
+        4: 18,
+        5: 18,
+        6: 16,
+        7: 21,
+        8: 20,
+    }
     for col, width in widths.items():
         sheet.column_dimensions[get_column_letter(col)].width = width
 
