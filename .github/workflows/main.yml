@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - BTM_export.xls
+      - price_compare.py
   schedule:
     - cron: "0 6 * * *"
 
