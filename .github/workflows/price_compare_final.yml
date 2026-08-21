@@ -31,7 +31,7 @@ jobs:
       - name: Run price comparison
         env:
           TTE_ETAIL_API_KEY: ${{ secrets.TTE_ETAIL_API_KEY }}
-        run: python price_compare_final.py
+        run: python price_compare_net.py
 
       - name: Check result
         run: |
