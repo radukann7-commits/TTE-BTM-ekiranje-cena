@@ -16,22 +16,30 @@ from openpyxl.utils import get_column_letter
 
 BTM_FILE = "BTM_export.xls"
 OUTPUT_FILE = "BTM_TTE_poredjenje.xlsx"
-PDV = 1.20
 
 TTE_ETAIL_API_KEY = os.environ.get("TTE_ETAIL_API_KEY")
 TTE_HAVIT_API_KEY = os.environ.get("TTE_HAVIT_API_KEY")
 
 ETAIL_URL = (
     "https://tte.rs/api/sr/products"
-    "?output_type=xml&api_key="
-    + str(TTE_ETAIL_API_KEY)
+    "?output_type=xml&api_key=" + str(TTE_ETAIL_API_KEY)
 )
 
 HAVIT_URL = (
     "https://tte.rs/api/sr/products"
-    "?output_type=xml&api_key="
-    + str(TTE_HAVIT_API_KEY)
+    "?output_type=xml&api_key=" + str(TTE_HAVIT_API_KEY)
 )
+
+# Ovi brendovi se izbacuju iz poređenja.
+# JBL, Samsung i Apple OSTAJU.
+EXCLUDED_BRANDS = {
+    "bavin",
+    "bavitel",
+    "havit",
+    "powerology",
+    "green lion",
+    "porodo",
+}
 
 
 # ============================================================
@@ -42,8 +50,7 @@ def clean_text(value):
     if value is None:
         return ""
 
-    value = str(value)
-    value = html.unescape(value)
+    value = html.unescape(str(value))
     value = re.sub(r"<[^>]+>", " ", value)
     value = value.replace("\xa0", " ")
     value = value.replace("\n", " ")
@@ -53,21 +60,29 @@ def clean_text(value):
     return value.strip()
 
 
+def normalize_text(value):
+    value = clean_text(value).lower()
+    replacements = {
+        "č": "c",
+        "ć": "c",
+        "š": "s",
+        "ž": "z",
+        "đ": "d",
+    }
+    for a, b in replacements.items():
+        value = value.replace(a, b)
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value).split())
+
+
 def normalize_ean(value):
-    """EAN se koristi ISKLJUČIVO za povezivanje artikala."""
     if value is None:
         return ""
 
     value = str(value).strip()
-
-    # Excel/BTM može dati EAN kao 13-cifren broj sa .0
     if value.endswith(".0"):
         value = value[:-2]
 
-    # Ako je EAN već decimalno zapisan kao float, sačuvaj samo cifre.
-    ean = re.sub(r"\D", "", value)
-
-    return ean
+    return re.sub(r"\D", "", value)
 
 
 def number_from_text(value):
@@ -77,25 +92,22 @@ def number_from_text(value):
     if isinstance(value, (int, float)):
         return float(value)
 
-    text = str(value).strip()
-
+    text = clean_text(value)
     if not text:
         return None
 
-    text = text.replace("RSD", "")
-    text = text.replace("rsd", "")
-    text = text.replace("DIN", "")
-    text = text.replace("din", "")
-    text = text.replace(" ", "")
+    text = (
+        text.replace("RSD", "")
+        .replace("rsd", "")
+        .replace("DIN", "")
+        .replace("din", "")
+        .replace(" ", "")
+    )
 
-    # 13.900 = 13900
     if re.fullmatch(r"\d{1,3}(\.\d{3})+", text):
         text = text.replace(".", "")
-
-    # 13,900 = 13900
     elif re.fullmatch(r"\d{1,3}(,\d{3})+", text):
         text = text.replace(",", "")
-
     else:
         text = text.replace(",", ".")
 
@@ -108,13 +120,8 @@ def number_from_text(value):
 def format_price(value):
     if value is None:
         return ""
-
     value = round(float(value), 2)
-
-    if value.is_integer():
-        return int(value)
-
-    return value
+    return int(value) if value.is_integer() else value
 
 
 def get_xml_value(product, tag):
@@ -124,97 +131,23 @@ def get_xml_value(product, tag):
     return clean_text(element.text)
 
 
-# ============================================================
-# TTE XML
-# ============================================================
+def find_column(headers, possible_names):
+    normalized_headers = [normalize_text(h) for h in headers]
+    normalized_names = [normalize_text(x) for x in possible_names]
 
-def download_xml(url, naziv):
-    print("")
-    print("=" * 70)
-    print("PREUZIMANJE:", naziv)
-    print("=" * 70)
+    for index, header in enumerate(normalized_headers):
+        if header in normalized_names:
+            return index
 
-    response = requests.get(
-        url,
-        timeout=120,
-        headers={"User-Agent": "Mozilla/5.0"}
-    )
+    for index, header in enumerate(normalized_headers):
+        if any(name in header for name in normalized_names):
+            return index
 
-    print("HTTP status:", response.status_code)
-    print("Content-Type:", response.headers.get("content-type"))
-    print("Veličina:", len(response.content), "bytes")
-
-    response.raise_for_status()
-
-    if not response.content:
-        raise Exception(f"{naziv}: XML je prazan.")
-
-    try:
-        ET.fromstring(response.content)
-    except Exception as e:
-        print("PRVI DEO ODGOVORA:")
-        print(response.content[:500])
-        raise Exception(
-            f"{naziv}: odgovor nije ispravan XML. Greška: {e}"
-        )
-
-    print(naziv, "XML JE ISPRAVAN.")
-    return response.content
-
-
-def parse_tte_xml(xml_data, source_name):
-    print("")
-    print("=" * 70)
-    print("OBRADA:", source_name)
-    print("=" * 70)
-
-    root = ET.fromstring(xml_data)
-    products = {}
-
-    for product in root.findall(".//product"):
-        ean = normalize_ean(get_xml_value(product, "ean"))
-
-        # Bez EAN-a nema automatskog povezivanja.
-        if not ean:
-            continue
-
-        article_number = get_xml_value(product, "article_number")
-        name = get_xml_value(product, "name")
-        brand = get_xml_value(product, "brand")
-
-        # TTE API daje NETO cenu.
-        net_price_text = get_xml_value(product, "neto_price")
-
-        if not net_price_text:
-            net_price_text = get_xml_value(product, "net_price")
-
-        if not net_price_text:
-            net_price_text = get_xml_value(product, "price")
-
-        net_price = number_from_text(net_price_text)
-
-        # Ako isti EAN postoji više puta, zadržavamo prvi zapis.
-        if ean not in products:
-            products[ean] = {
-                "ean": ean,
-                "article_number": article_number,
-                "name": name,
-                "brand": brand,
-                "net_price": net_price,
-                "price_with_vat": (
-                    net_price * PDV
-                    if net_price is not None
-                    else None
-                ),
-                "source": source_name,
-            }
-
-    print("Proizvoda sa EAN-om:", len(products))
-    return products
+    return None
 
 
 # ============================================================
-# BTM XLS
+# BTM
 # ============================================================
 
 def find_btm_header(sheet):
@@ -226,10 +159,9 @@ def find_btm_header(sheet):
             clean_text(sheet.cell_value(row_index, col)).lower()
             for col in range(sheet.ncols)
         ]
-
         row_text = " | ".join(values)
-        score = 0
 
+        score = 0
         if "sifra" in row_text or "šifra" in row_text:
             score += 3
         if "naziv" in row_text:
@@ -246,28 +178,10 @@ def find_btm_header(sheet):
     if best_row is None:
         raise Exception("Ne mogu da pronađem zaglavlje BTM tabele.")
 
-    print("BTM header red:", best_row + 1)
     return best_row
 
 
-def find_column(headers, possible_names):
-    normalized_headers = [clean_text(h).lower() for h in headers]
-
-    for index, header in enumerate(normalized_headers):
-        for possible in possible_names:
-            if header == possible.lower():
-                return index
-
-    for index, header in enumerate(normalized_headers):
-        for possible in possible_names:
-            if possible.lower() in header:
-                return index
-
-    return None
-
-
 def read_btm_xls(filename):
-    print("")
     print("=" * 70)
     print("ČITANJE BTM XLS")
     print("=" * 70)
@@ -277,12 +191,6 @@ def read_btm_xls(filename):
 
     workbook = xlrd.open_workbook(filename, formatting_info=False)
     sheet = workbook.sheet_by_index(0)
-
-    print("Sheetovi:", workbook.sheet_names())
-    print("Aktivni sheet:", sheet.name)
-    print("Redova:", sheet.nrows)
-    print("Kolona:", sheet.ncols)
-
     header_row = find_btm_header(sheet)
 
     headers = [
@@ -290,43 +198,27 @@ def read_btm_xls(filename):
         for col in range(sheet.ncols)
     ]
 
-    print("BTM KOLONE:")
-    for i, header in enumerate(headers):
-        print(i, "=>", header)
-
     ean_col = find_column(
         headers,
         ["EAN", "Barkod", "Bar code", "Barcode", "EAN kod"]
     )
-
     name_col = find_column(
         headers,
         ["Naziv", "Naziv artikla", "Artikal naziv", "Product name", "Name"]
     )
-
     price_col = find_column(
         headers,
-        ["Cena", "Cena RSD", "Cena sa PDV", "Price"]
+        ["Cena", "Cena RSD", "Cena bez PDV", "Cena NETO", "Neto cena", "Price"]
     )
-
     code_col = find_column(
         headers,
-        ["Šifra", "Sifra", "Artikal", "Artikal šifra", "Product code", "Code"]
+        ["Šifra", "Sifra", "Artikal šifra", "Product code", "Code"]
     )
-
-    print("")
-    print("PRONAĐENE BTM KOLONE:")
-    print("EAN:", ean_col)
-    print("Naziv:", name_col)
-    print("Cena:", price_col)
-    print("Šifra:", code_col)
 
     if ean_col is None:
         raise Exception("Ne mogu da pronađem BTM EAN/Barkod kolonu.")
-
     if name_col is None:
         raise Exception("Ne mogu da pronađem BTM kolonu sa nazivom artikla.")
-
     if price_col is None:
         raise Exception("Ne mogu da pronađem BTM kolonu sa cenom.")
 
@@ -336,136 +228,182 @@ def read_btm_xls(filename):
         ean = normalize_ean(sheet.cell_value(row, ean_col))
         name = clean_text(sheet.cell_value(row, name_col))
         price = number_from_text(sheet.cell_value(row, price_col))
+        code = (
+            clean_text(sheet.cell_value(row, code_col))
+            if code_col is not None
+            else ""
+        )
 
-        if not name:
+        # Bez EAN-a ne ulazi u automatsko poređenje.
+        if not ean or not name or price is None:
             continue
 
+        # BTM cena se tretira kao NETO cena, bez PDV-a.
         products.append({
             "ean": ean,
             "name": name,
-            "price_with_vat": price,
-            "code": (
-                clean_text(sheet.cell_value(row, code_col))
-                if code_col is not None
-                else ""
-            )
+            "code": code,
+            "net_price": price,
         })
 
-    print("BTM proizvoda:", len(products))
-    print("BTM proizvoda sa EAN-om:", sum(1 for p in products if p["ean"]))
+    print("BTM artikala sa EAN-om:", len(products))
     return products
 
 
 # ============================================================
-# GLAVNI PROGRAM
+# TTE API
+# ============================================================
+
+def download_xml(url, source_name):
+    print("=" * 70)
+    print("PREUZIMANJE:", source_name)
+    print("=" * 70)
+
+    response = requests.get(
+        url,
+        timeout=120,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
+    response.raise_for_status()
+
+    if not response.content:
+        raise Exception(f"{source_name}: XML je prazan.")
+
+    try:
+        ET.fromstring(response.content)
+    except Exception as e:
+        print(response.content[:500])
+        raise Exception(f"{source_name}: odgovor nije ispravan XML: {e}")
+
+    return response.content
+
+
+def parse_tte_xml(xml_data, source_name):
+    root = ET.fromstring(xml_data)
+    products = {}
+
+    for product in root.findall(".//product"):
+        ean = normalize_ean(get_xml_value(product, "ean"))
+        if not ean:
+            continue
+
+        brand = get_xml_value(product, "brand")
+        if normalize_text(brand) in EXCLUDED_BRANDS:
+            continue
+
+        price_text = get_xml_value(product, "neto_price")
+        if not price_text:
+            price_text = get_xml_value(product, "net_price")
+        if not price_text:
+            price_text = get_xml_value(product, "price")
+
+        net_price = number_from_text(price_text)
+        if net_price is None:
+            continue
+
+        if ean not in products:
+            products[ean] = {
+                "ean": ean,
+                "article_number": get_xml_value(product, "article_number"),
+                "name": get_xml_value(product, "name"),
+                "brand": brand,
+                "net_price": net_price,
+            }
+
+    print(source_name, "artikala sa EAN-om posle filtera:", len(products))
+    return products
+
+
+# ============================================================
+# EXCEL REZULTAT
 # ============================================================
 
 def main():
     print("")
     print("=" * 70)
-    print("TTE / BTM POREĐENJE - SAMO EAN")
+    print("TTE / BTM POREĐENJE - FINAL")
     print("=" * 70)
+    print("POVEZIVANJE: ISKLJUČIVO PO EAN-u")
+    print("CENE: BTM NETO + TTE NETO")
+    print("IZLAZ: SAMO ARTIKLI SA RAZLIKOM")
+    print("IZBAČENI BRENDOVI:", ", ".join(sorted(EXCLUDED_BRANDS)))
 
     if not TTE_ETAIL_API_KEY:
         raise Exception("Nedostaje GitHub Secret: TTE_ETAIL_API_KEY")
-
     if not TTE_HAVIT_API_KEY:
         raise Exception("Nedostaje GitHub Secret: TTE_HAVIT_API_KEY")
 
-    print("TTE API ključevi: OK")
-    print("PDV:", int((PDV - 1) * 100), "%")
-    print("POKLOPAVANJE: ISKLJUČIVO PO EAN-u")
-
-    # --------------------------------------------------------
-    # BTM
-    # --------------------------------------------------------
     btm_products = read_btm_xls(BTM_FILE)
 
-    # --------------------------------------------------------
-    # TTE XML
-    # --------------------------------------------------------
-    etail_xml = download_xml(ETAIL_URL, "ETAIL SPEC")
+    etail_xml = download_xml(ETAIL_URL, "ETAIL")
     havit_xml = download_xml(HAVIT_URL, "HAVIT")
 
-    etail_products = parse_tte_xml(etail_xml, "ETAIL SPEC")
+    etail_products = parse_tte_xml(etail_xml, "ETAIL")
     havit_products = parse_tte_xml(havit_xml, "HAVIT")
 
-    # --------------------------------------------------------
-    # POREĐENJE
-    # --------------------------------------------------------
     results = []
-
-    matched_havit = 0
     matched_etail = 0
-    unmatched = 0
+    matched_havit = 0
 
     for btm in btm_products:
         ean = btm["ean"]
-
-        havit = havit_products.get(ean) if ean else None
-        etail = etail_products.get(ean) if ean else None
-
-        if havit:
-            matched_havit += 1
+        etail = etail_products.get(ean)
+        havit = havit_products.get(ean)
 
         if etail:
             matched_etail += 1
+        if havit:
+            matched_havit += 1
 
-        if not havit and not etail:
-            unmatched += 1
+        if not etail and not havit:
+            continue
 
-        # U rezultat ulaze svi BTM artikli.
-        # Ako nema EAN ili nema poklapanja, TTE podaci ostaju prazni.
-        tte = havit or etail
-
-        btm_price = btm["price_with_vat"]
-
-        havit_net = havit["net_price"] if havit else None
-        havit_vat = havit["price_with_vat"] if havit else None
+        btm_net = btm["net_price"]
 
         etail_net = etail["net_price"] if etail else None
-        etail_vat = etail["price_with_vat"] if etail else None
+        havit_net = havit["net_price"] if havit else None
 
-        havit_difference = (
-            havit_vat - btm_price
-            if havit_vat is not None and btm_price is not None
-            else None
+        etail_diff = (
+            round(etail_net - btm_net, 2)
+            if etail_net is not None else None
+        )
+        havit_diff = (
+            round(havit_net - btm_net, 2)
+            if havit_net is not None else None
         )
 
-        etail_difference = (
-            etail_vat - btm_price
-            if etail_vat is not None and btm_price is not None
-            else None
+        # Ako je cena ista u oba postojeća cenovna ranga, ne prikazuj artikal.
+        has_difference = (
+            (etail_diff is not None and abs(etail_diff) >= 0.01)
+            or
+            (havit_diff is not None and abs(havit_diff) >= 0.01)
         )
 
-        results.append({
-            "ean": ean,
-            "btm_code": btm["code"],
-            "btm_name": btm["name"],
-            "btm_price": format_price(btm_price),
-            "tte_code": tte["article_number"] if tte else "",
-            "tte_name": tte["name"] if tte else "",
-            "havit_net": format_price(havit_net),
-            "havit_vat": format_price(havit_vat),
-            "havit_difference": format_price(havit_difference),
-            "etail_net": format_price(etail_net),
-            "etail_vat": format_price(etail_vat),
-            "etail_difference": format_price(etail_difference),
-            "match": (
-                "HAVIT + ETAIL" if havit and etail
-                else "HAVIT" if havit
-                else "ETAIL" if etail
-                else "NIJE PRONAĐEN"
-            )
-        })
+        if not has_difference:
+            continue
 
-    # --------------------------------------------------------
-    # EXCEL
-    # --------------------------------------------------------
-    print("")
-    print("=" * 70)
-    print("PRAVLJENJE EXCELA")
-    print("=" * 70)
+        results.append([
+            ean,
+            btm["code"],
+            btm["name"],
+            format_price(btm_net),
+            format_price(havit_net),
+            format_price(havit_diff),
+            format_price(etail_net),
+            format_price(etail_diff),
+            havit["article_number"] if havit else (etail["article_number"] if etail else ""),
+            havit["name"] if havit else (etail["name"] if etail else ""),
+            havit["brand"] if havit else (etail["brand"] if etail else ""),
+        ])
+
+    # Najveće apsolutne razlike prve.
+    results.sort(
+        key=lambda row: max(
+            abs(float(row[5])) if row[5] != "" else 0,
+            abs(float(row[7])) if row[7] != "" else 0,
+        ),
+        reverse=True,
+    )
 
     workbook = Workbook()
     sheet = workbook.active
@@ -475,16 +413,14 @@ def main():
         "EAN",
         "BTM šifra",
         "BTM naziv",
-        "BTM cena sa PDV",
+        "BTM cena NETO",
+        "HAVIT cena NETO",
+        "Razlika HAVIT",
+        "ETAIL cena NETO",
+        "Razlika ETAIL",
         "TTE šifra",
         "TTE naziv",
-        "HAVIT neto",
-        "HAVIT sa PDV",
-        "Razlika HAVIT",
-        "ETAIL neto",
-        "ETAIL sa PDV",
-        "Razlika ETAIL",
-        "Poklapanje"
+        "Brend",
     ]
 
     sheet.append(headers)
@@ -493,71 +429,46 @@ def main():
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    for item in results:
-        sheet.append([
-            item["ean"],
-            item["btm_code"],
-            item["btm_name"],
-            item["btm_price"],
-            item["tte_code"],
-            item["tte_name"],
-            item["havit_net"],
-            item["havit_vat"],
-            item["havit_difference"],
-            item["etail_net"],
-            item["etail_vat"],
-            item["etail_difference"],
-            item["match"]
-        ])
+    for row in results:
+        sheet.append(row)
 
-    for row in range(2, sheet.max_row + 1):
-        for col in [4, 7, 8, 9, 10, 11, 12]:
-            cell = sheet.cell(row=row, column=col)
+    for row in sheet.iter_rows(min_row=2):
+        for col in [4, 5, 6, 7, 8]:
+            cell = row[col - 1]
             if isinstance(cell.value, (int, float)):
                 cell.number_format = "#,##0.00"
 
-        for col in [8, 11, 13]:
-            sheet.cell(row=row, column=col).font = Font(bold=True)
-
-        for cell in sheet[row]:
-            cell.alignment = Alignment(vertical="center")
-
     widths = {
         1: 16,
-        2: 15,
-        3: 55,
+        2: 16,
+        3: 50,
         4: 18,
-        5: 15,
-        6: 55,
-        7: 16,
-        8: 18,
+        5: 18,
+        6: 16,
+        7: 18,
+        8: 16,
         9: 18,
-        10: 16,
+        10: 50,
         11: 18,
-        12: 18,
-        13: 18,
     }
 
-    for column, width in widths.items():
-        sheet.column_dimensions[get_column_letter(column)].width = width
+    for col, width in widths.items():
+        sheet.column_dimensions[get_column_letter(col)].width = width
 
-    sheet.auto_filter.ref = sheet.dimensions
     sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
 
     workbook.save(OUTPUT_FILE)
 
-    # --------------------------------------------------------
-    # STATISTIKA
-    # --------------------------------------------------------
     print("")
     print("=" * 70)
     print("ZAVRŠENO")
     print("=" * 70)
     print("BTM artikala:", len(btm_products))
-    print("HAVIT poklapanja po EAN-u:", matched_havit)
     print("ETAIL poklapanja po EAN-u:", matched_etail)
-    print("Bez poklapanja:", unmatched)
-    print("Izlaz:", OUTPUT_FILE)
+    print("HAVIT poklapanja po EAN-u:", matched_havit)
+    print("ARTIKALA SA RAZLIKOM:", len(results))
+    print("IZLAZ:", OUTPUT_FILE)
 
 
 if __name__ == "__main__":
