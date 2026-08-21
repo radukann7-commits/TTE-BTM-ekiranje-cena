@@ -2,6 +2,9 @@ name: TTE BTM Poređenje
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - BTM_export.xls
   schedule:
     - cron: "0 6 * * *"
 
@@ -10,90 +13,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # =====================================================
-      # 1. PREUZMI KOD
-      # =====================================================
-
       - name: Checkout
         uses: actions/checkout@v4
-
-
-      # =====================================================
-      # 2. PYTHON
-      # =====================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-
-      # =====================================================
-      # 3. INSTALIRAJ PAKETE
-      # =====================================================
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-        pip install requests openpyxl xlrd
-
-
-      # =====================================================
-      # 4. PROVERI BTM FAJL
-      # =====================================================
+          pip install requests openpyxl xlrd
 
       - name: Check BTM file
         run: |
           echo "Sadržaj repository-ja:"
           ls -lah
-
           echo ""
           echo "Provera BTM fajla:"
-
-         if [ ! -f "BTM_export.xls" ]; then
+          if [ ! -f "BTM_export.xls" ]; then
             echo "GREŠKA: BTM_export.xls ne postoji!"
-            echo ""
-            echo "Potrebno je postaviti BTM_export.xlsx u root repository-ja."
             exit 1
           fi
-
-          echo "BTM_export.xlsx pronađen."
-          ls -lh BTM_export.xlsx
-
-
-      # =====================================================
-      # 5. POKRENI POREĐENJE
-      # =====================================================
+          echo "BTM_export.xls pronađen."
+          ls -lh BTM_export.xls
 
       - name: Run price comparison
         env:
           TTE_ETAIL_API_KEY: ${{ secrets.TTE_ETAIL_API_KEY }}
           TTE_HAVIT_API_KEY: ${{ secrets.TTE_HAVIT_API_KEY }}
-
         run: |
           python price_compare.py
 
-
-      # =====================================================
-      # 6. PROVERI REZULTAT
-      # =====================================================
-
       - name: Check result
         run: |
-          echo "Rezultat:"
-
           if [ ! -f "BTM_TTE_poredjenje.xlsx" ]; then
             echo "GREŠKA: Excel rezultat nije napravljen!"
             exit 1
           fi
-
           ls -lh BTM_TTE_poredjenje.xlsx
-
-
-      # =====================================================
-      # 7. SAČUVAJ EXCEL
-      # =====================================================
 
       - name: Upload comparison Excel
         uses: actions/upload-artifact@v4
