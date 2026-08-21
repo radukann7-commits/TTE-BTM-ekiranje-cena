@@ -24,19 +24,57 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests openpyxl xlrd
+          pip install requests openpyxl xlrd xlwt
 
-      - name: Check BTM file
+      - name: Check and prepare BTM file
         run: |
           echo "Sadržaj repository-ja:"
           ls -lah
-          echo ""
-          echo "Provera BTM fajla:"
+
           if [ ! -f "BTM_export.xls" ]; then
             echo "GREŠKA: BTM_export.xls ne postoji!"
             exit 1
           fi
-          echo "BTM_export.xls pronađen."
+
+          echo "BTM fajl pronađen:"
+          ls -lh BTM_export.xls
+
+          python - <<'PY'
+          import os
+          import zipfile
+          from openpyxl import load_workbook
+          import xlwt
+
+          filename = "BTM_export.xls"
+
+          # BTM portal može da pošalje pravi XLSX fajl sa .xls ekstenzijom.
+          # XLSX je ZIP format i počinje sa PK. U tom slučaju napravimo
+          # privremeni pravi XLS fajl koji postojeći price_compare.py može da pročita.
+          if zipfile.is_zipfile(filename):
+              print("BTM fajl je XLSX sadržaj sa .xls ekstenzijom.")
+              print("Konvertujem ga u pravi XLS za poređenje...")
+
+              wb_in = load_workbook(filename, data_only=True, read_only=True)
+              ws_in = wb_in.active
+
+              wb_out = xlwt.Workbook()
+              ws_out = wb_out.add_sheet("BTM")
+
+              for row_idx, row in enumerate(ws_in.iter_rows(), start=0):
+                  for col_idx, cell in enumerate(row, start=0):
+                      value = cell.value
+                      if value is not None:
+                          ws_out.write(row_idx, col_idx, value)
+
+              wb_out.save(filename)
+              wb_in.close()
+
+              print("Konverzija završena.")
+          else:
+              print("BTM fajl je pravi XLS. Nije potrebna konverzija.")
+          PY
+
+          file BTM_export.xls
           ls -lh BTM_export.xls
 
       - name: Run price comparison
