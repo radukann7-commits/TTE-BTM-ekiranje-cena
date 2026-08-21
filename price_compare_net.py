@@ -3,6 +3,7 @@ import re
 import html
 import zipfile
 import io
+import csv
 import xlrd
 import requests
 import xml.etree.ElementTree as ET
@@ -116,21 +117,34 @@ def _rows_from_values(values):
 
 
 def read_btm():
-    # BTM portal trenutno vraća XLSX sadržaj sa .xls ekstenzijom.
-    # Zato prvo proveravamo ZIP/XLSX format; ako nije XLSX, koristimo pravi XLS parser.
+    # BTM portal trenutno vraća tekstualni TSV export sa .xls ekstenzijom.
+    # Neki exporti mogu biti pravi XLSX ili pravi XLS, pa podržavamo sva tri formata.
     data = open(BTM_FILE, "rb").read()
 
-    if zipfile.is_zipfile(io.BytesIO(data)):
+    # 1) TSV/CSV sadržaj sa .xls ekstenzijom (trenutni BTM format)
+    text = data.decode("utf-8-sig", errors="replace")
+    first_line = text.splitlines()[0] if text.splitlines() else ""
+    if "\t" in first_line:
+        values = list(csv.reader(io.StringIO(text), delimiter="\t"))
+        out = _rows_from_values(values)
+        print("BTM format: TSV")
+
+    # 2) XLSX sadržaj sa .xls ekstenzijom
+    elif zipfile.is_zipfile(io.BytesIO(data)):
         wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
         sh = wb.active
         values = [list(row) for row in sh.iter_rows(values_only=True)]
         out = _rows_from_values(values)
         wb.close()
+        print("BTM format: XLSX")
+
+    # 3) Pravi XLS
     else:
         wb = xlrd.open_workbook(BTM_FILE, formatting_info=False)
         sh = wb.sheet_by_index(0)
         values = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows)]
         out = _rows_from_values(values)
+        print("BTM format: XLS")
 
     print("BTM artikala sa EAN-om:", len(out))
     return out
