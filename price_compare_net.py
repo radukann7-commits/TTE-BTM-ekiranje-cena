@@ -1,10 +1,12 @@
 import os
 import re
 import html
+import zipfile
+import io
 import xlrd
 import requests
 import xml.etree.ElementTree as ET
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 
@@ -12,8 +14,9 @@ BTM_FILE = "BTM_export.xls"
 OUTPUT_FILE = "BTM_TTE_poredjenje.xlsx"
 
 # Ovi brendovi se NE prikazuju u poređenju.
+# JBL, Samsung i Apple OSTAJU u poređenju.
 EXCLUDED_BRANDS = {
-    "havit", "jbl", "samsung", "apple",
+    "bavin", "bavitel", "havit",
     "powerology", "green lion", "porodo"
 }
 
@@ -79,14 +82,11 @@ def column(headers, names):
     return None
 
 
-def read_btm():
-    wb = xlrd.open_workbook(BTM_FILE, formatting_info=False)
-    sh = wb.sheet_by_index(0)
-
+def _rows_from_values(values):
     header = None
     score_best = 0
-    for r in range(min(sh.nrows, 50)):
-        text = " | ".join(clean(sh.cell_value(r, c)).lower() for c in range(sh.ncols))
+    for r, row in enumerate(values[:50]):
+        text = " | ".join(clean(x).lower() for x in row)
         score = (3 if "ean" in text or "barkod" in text else 0) + (3 if "naziv" in text else 0) + (2 if "cena" in text else 0) + (2 if "sifra" in text or "šifra" in text else 0)
         if score > score_best:
             score_best, header = score, r
@@ -94,7 +94,7 @@ def read_btm():
     if header is None:
         raise Exception("Ne mogu da pronađem BTM zaglavlje.")
 
-    headers = [clean(sh.cell_value(header, c)) for c in range(sh.ncols)]
+    headers = [clean(x) for x in values[header]]
     ec = column(headers, ["EAN", "Barkod", "Barcode", "EAN kod"])
     nc = column(headers, ["Naziv", "Naziv artikla", "Product name", "Name"])
     pc = column(headers, ["Cena", "Cena RSD", "Cena sa PDV", "Price"])
@@ -104,13 +104,33 @@ def read_btm():
         raise Exception("Ne mogu da pronađem EAN, naziv ili cenu u BTM fajlu.")
 
     out = []
-    for r in range(header + 1, sh.nrows):
-        code = clean(sh.cell_value(r, cc)) if cc is not None else ""
-        name = clean(sh.cell_value(r, nc))
-        price = num(sh.cell_value(r, pc))
-        code_ean = ean(sh.cell_value(r, ec))
+    for row in values[header + 1:]:
+        row = list(row) + [""] * max(0, len(headers) - len(row))
+        code = clean(row[cc]) if cc is not None else ""
+        name = clean(row[nc])
+        price = num(row[pc])
+        code_ean = ean(row[ec])
         if name and price is not None and code_ean:
             out.append({"ean": code_ean, "name": name, "code": code, "price": price})
+    return out
+
+
+def read_btm():
+    # BTM portal trenutno vraća XLSX sadržaj sa .xls ekstenzijom.
+    # Zato prvo proveravamo ZIP/XLSX format; ako nije XLSX, koristimo pravi XLS parser.
+    data = open(BTM_FILE, "rb").read()
+
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        sh = wb.active
+        values = [list(row) for row in sh.iter_rows(values_only=True)]
+        out = _rows_from_values(values)
+        wb.close()
+    else:
+        wb = xlrd.open_workbook(BTM_FILE, formatting_info=False)
+        sh = wb.sheet_by_index(0)
+        values = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows)]
+        out = _rows_from_values(values)
 
     print("BTM artikala sa EAN-om:", len(out))
     return out
@@ -160,7 +180,7 @@ def main():
         if not t:
             continue
 
-        # VAŽNO: OBE CENE SU NETO, BEZ PDV-a. NEMA MNOŽENJA SA 1.20.
+        # OBE CENE SU NETO, BEZ PDV-a. NEMA MNOŽENJA/DELJENJA SA 1.20.
         diff = round(t["price"] - b["price"], 2)
         if abs(diff) < 0.01:
             continue
