@@ -11,14 +11,13 @@ from openpyxl.utils import get_column_letter
 
 BTM_FILE = "BTM_export.xls"
 OUTPUT_FILE = "BTM_TTE_poredjenje.xlsx"
-PDV = 1.20
 
 # Brendovi koji se NE porede.
+# Svi ostali brendovi se porede.
 EXCLUDED_BRANDS = {
+    "bavin",
+    "bavitel",
     "havit",
-    "jbl",
-    "samsung",
-    "apple",
     "powerology",
     "green lion",
     "porodo",
@@ -128,6 +127,7 @@ def parse_tte_xml(xml_data):
         article_number = get_xml_value(product, "article_number")
         name = get_xml_value(product, "name")
 
+        # TTE cena koja se poredi je NETO cena, bez PDV-a.
         net_text = get_xml_value(product, "neto_price")
         if not net_text:
             net_text = get_xml_value(product, "net_price")
@@ -145,7 +145,6 @@ def parse_tte_xml(xml_data):
                 "article_number": article_number,
                 "name": name,
                 "net_price": net_price,
-                "price_with_vat": net_price * PDV,
             }
 
     print("TTE proizvoda sa EAN-om nakon filtera:", len(products))
@@ -215,13 +214,14 @@ def read_btm_xls():
     for row in range(header_row + 1, sheet.nrows):
         ean = normalize_ean(sheet.cell_value(row, ean_col))
         name = clean_text(sheet.cell_value(row, name_col))
+        # BTM cena koja se poredi je NETO cena, bez PDV-a.
         price = number_from_text(sheet.cell_value(row, price_col))
         if not name or price is None:
             continue
         products.append({
             "ean": ean,
             "name": name,
-            "price_with_vat": price,
+            "net_price": price,
             "code": clean_text(sheet.cell_value(row, code_col)) if code_col is not None else "",
         })
 
@@ -231,7 +231,7 @@ def read_btm_xls():
 
 def main():
     print("TTE / BTM POREĐENJE")
-    print("SAMO EAN | SAMO RAZLIKE | BTM SA PDV | TTE NETO + 20% PDV")
+    print("SAMO EAN | SAMO RAZLIKE | OBA NETO BEZ PDV-a")
 
     if not TTE_ETAIL_API_KEY:
         raise Exception("Nedostaje GitHub Secret: TTE_ETAIL_API_KEY")
@@ -250,8 +250,9 @@ def main():
         if not tte:
             continue
 
-        btm_price = btm["price_with_vat"]
-        tte_price = tte["price_with_vat"]
+        # Direktno poređenje NETO cena: BTM NETO vs TTE NETO.
+        btm_price = btm["net_price"]
+        tte_price = tte["net_price"]
         difference = round(tte_price - btm_price, 2)
 
         # U tabelu ulaze ISKLJUČIVO artikli sa razlikom u ceni.
@@ -268,14 +269,13 @@ def main():
             format_price(btm_price),
             tte["article_number"],
             tte["name"],
-            format_price(tte["net_price"]),
             format_price(tte_price),
             format_price(difference),
             format_price(difference_percent),
         ])
 
-    # Najveća razlika prva.
-    results.sort(key=lambda r: abs(float(r[9])), reverse=True)
+    # Najveća apsolutna razlika prva.
+    results.sort(key=lambda r: abs(float(r[8])), reverse=True)
 
     workbook = Workbook()
     sheet = workbook.active
@@ -286,11 +286,10 @@ def main():
         "Brend",
         "BTM šifra",
         "BTM naziv",
-        "BTM cena sa PDV",
+        "BTM neto",
         "TTE šifra",
         "TTE naziv",
         "TTE neto",
-        "TTE cena sa PDV",
         "Razlika",
         "Razlika %",
     ]
@@ -303,7 +302,7 @@ def main():
     for row in results:
         sheet.append(row)
 
-    widths = [16, 18, 18, 42, 18, 18, 42, 16, 18, 14, 12]
+    widths = [16, 18, 18, 42, 16, 18, 42, 16, 14, 12]
     for i, width in enumerate(widths, 1):
         sheet.column_dimensions[get_column_letter(i)].width = width
 
@@ -311,7 +310,7 @@ def main():
     sheet.auto_filter.ref = sheet.dimensions
 
     for row in sheet.iter_rows(min_row=2):
-        for col in [5, 8, 9, 10, 11]:
+        for col in [5, 8, 9, 10]:
             row[col - 1].number_format = '#,##0.00'
 
     workbook.save(OUTPUT_FILE)
