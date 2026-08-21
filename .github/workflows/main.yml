@@ -51,8 +51,8 @@ jobs:
           echo ""
           echo "Provera BTM fajla:"
 
-          if [ ! -f "BTM_export.xlsx" ]; then
-            echo "GREŠKA: BTM_export.xlsx ne postoji!"
+         if [ ! -f "BTM_export.xls" ]; then
+            echo "GREŠKA: BTM_export.xls ne postoji!"
             echo ""
             echo "Potrebno je postaviti BTM_export.xlsx u root repository-ja."
             exit 1
