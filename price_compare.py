@@ -1,3 +1,4 @@
+import xlrd
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -33,7 +34,7 @@ HAVIT_URL = (
 # FAJLOVI
 # ============================================================
 
-BTM_FILE = "BTM_export.xlsx"
+BTM_FILE = "BTM_export.xls"
 OUTPUT_FILE = "BTM_TTE_poredjenje.xlsx"
 
 MIN_MATCH_SCORE = 0.72
