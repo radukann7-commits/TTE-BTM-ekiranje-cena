@@ -176,7 +176,10 @@ def parse_tte_xml(xml_data, source_name):
             continue
 
         if ean not in products:
-            products[ean] = {"net_price": net_price}
+            products[ean] = {
+                "net_price": net_price,
+                "article_number": get_xml_value(product, "article_number"),
+            }
     return products
 
 
@@ -187,7 +190,7 @@ def main():
         raise Exception("Nedostaje GitHub Secret: TTE_HAVIT_API_KEY")
 
     btm_products = read_btm_xls(BTM_FILE)
-    etail_products = parse_tte_xml(download_xml(ETAIL_URL, "ETAIL"), "ETAIL")
+    etail_products = parse_tte_xml(download_xml(ETAIL_URL, "ETAIL SPEC"), "ETAIL SPEC")
     havit_products = parse_tte_xml(download_xml(HAVIT_URL, "HAVIT"), "HAVIT")
 
     results = []
@@ -210,6 +213,8 @@ def main():
         if not ((havit_diff is not None and abs(havit_diff) >= 0.01) or (etail_diff is not None and abs(etail_diff) >= 0.01)):
             continue
 
+        tte_code = havit["article_number"] if havit else etail["article_number"]
+
         results.append([
             ean,
             btm["code"],
@@ -219,6 +224,7 @@ def main():
             format_price(havit_diff),
             format_price(etail_net),
             format_price(etail_diff),
+            tte_code,
         ])
 
     results.sort(key=lambda row: max(abs(float(row[5])) if row[5] != "" else 0, abs(float(row[7])) if row[7] != "" else 0), reverse=True)
@@ -234,8 +240,9 @@ def main():
         "BTM cena NETO",
         "HAVIT cena NETO",
         "Razlika HAVIT",
-        "ETAIL cena NETO",
-        "Razlika ETAIL",
+        "ETAIL SPEC cena NETO",
+        "Razlika ETAIL SPEC",
+        "TTE šifra",
     ]
     sheet.append(headers)
 
@@ -252,7 +259,7 @@ def main():
             if isinstance(cell.value, (int, float)):
                 cell.number_format = "#,##0.00"
 
-    widths = {1: 16, 2: 16, 3: 60, 4: 18, 5: 18, 6: 16, 7: 18, 8: 16}
+    widths = {1: 16, 2: 16, 3: 60, 4: 18, 5: 18, 6: 16, 7: 21, 8: 20, 9: 18}
     for col, width in widths.items():
         sheet.column_dimensions[get_column_letter(col)].width = width
 
