@@ -31,7 +31,8 @@ jobs:
       - name: Run price comparison
         env:
           TTE_ETAIL_API_KEY: ${{ secrets.TTE_ETAIL_API_KEY }}
-        run: python price_compare_net.py
+          TTE_HAVIT_API_KEY: ${{ secrets.TTE_HAVIT_API_KEY }}
+        run: python price_compare.py
 
       - name: Check result
         run: |
@@ -44,3 +45,4 @@ jobs:
           name: BTM-TTE-poredjenje-FINAL
           path: BTM_TTE_poredjenje.xlsx
           if-no-files-found: error
+          retention-days: 30
