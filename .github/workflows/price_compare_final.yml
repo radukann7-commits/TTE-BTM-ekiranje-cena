@@ -1,0 +1,46 @@
+name: TTE BTM Poređenje FINAL
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install xlrd requests openpyxl
+
+      - name: Check BTM file
+        run: |
+          test -f BTM_export.xls || (echo "GRESKA: BTM_export.xls ne postoji u root-u repozitorijuma" && exit 1)
+          ls -lh BTM_export.xls
+
+      - name: Run price comparison
+        env:
+          TTE_ETAIL_API_KEY: ${{ secrets.TTE_ETAIL_API_KEY }}
+        run: python price_compare_final.py
+
+      - name: Check result
+        run: |
+          test -f BTM_TTE_poredjenje.xlsx || (echo "GRESKA: rezultat nije napravljen" && exit 1)
+          ls -lh BTM_TTE_poredjenje.xlsx
+
+      - name: Upload comparison Excel
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTM-TTE-poredjenje-FINAL
+          path: BTM_TTE_poredjenje.xlsx
+          if-no-files-found: error
