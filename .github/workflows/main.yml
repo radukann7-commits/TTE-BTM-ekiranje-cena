@@ -40,20 +40,18 @@ jobs:
           ls -lh BTM_export.xls
 
           python - <<'PY'
-          import os
+          import csv
+          import io
           import zipfile
-          from openpyxl import load_workbook
           import xlwt
+          from openpyxl import load_workbook
 
           filename = "BTM_export.xls"
+          data = open(filename, "rb").read()
 
-          # BTM portal može da pošalje pravi XLSX fajl sa .xls ekstenzijom.
-          # XLSX je ZIP format i počinje sa PK. U tom slučaju napravimo
-          # privremeni pravi XLS fajl koji postojeći price_compare.py može da pročita.
-          if zipfile.is_zipfile(filename):
+          # 1. Ako je zapravo XLSX, pretvori ga u pravi XLS.
+          if zipfile.is_zipfile(io.BytesIO(data)):
               print("BTM fajl je XLSX sadržaj sa .xls ekstenzijom.")
-              print("Konvertujem ga u pravi XLS za poređenje...")
-
               wb_in = load_workbook(filename, data_only=True, read_only=True)
               ws_in = wb_in.active
 
@@ -62,16 +60,33 @@ jobs:
 
               for row_idx, row in enumerate(ws_in.iter_rows(), start=0):
                   for col_idx, cell in enumerate(row, start=0):
-                      value = cell.value
-                      if value is not None:
-                          ws_out.write(row_idx, col_idx, value)
+                      if cell.value is not None:
+                          ws_out.write(row_idx, col_idx, cell.value)
 
               wb_out.save(filename)
               wb_in.close()
+              print("XLSX -> XLS konverzija završena.")
 
-              print("Konverzija završena.")
+          # 2. BTM portal trenutno daje UTF-8 TSV/tekst fajl sa .xls ekstenzijom.
+          #    Prepoznajemo ga po UTF-8 BOM-u i tabovima i pretvaramo u pravi XLS.
+          elif data.startswith(b"\xef\xbb\xbf") or b"\t" in data[:5000]:
+              print("BTM fajl je tekstualni TSV export sa .xls ekstenzijom.")
+              text = data.decode("utf-8-sig", errors="replace")
+              rows = csv.reader(io.StringIO(text), delimiter="\t")
+
+              wb_out = xlwt.Workbook()
+              ws_out = wb_out.add_sheet("BTM")
+
+              for row_idx, row in enumerate(rows, start=0):
+                  for col_idx, value in enumerate(row, start=0):
+                      ws_out.write(row_idx, col_idx, value)
+
+              wb_out.save(filename)
+              print("TSV -> XLS konverzija završena.")
+
+          # 3. Ako je pravi XLS, ostavljamo ga bez izmene.
           else:
-              print("BTM fajl je pravi XLS. Nije potrebna konverzija.")
+              print("BTM fajl izgleda kao pravi XLS. Nije potrebna konverzija.")
           PY
 
           file BTM_export.xls
